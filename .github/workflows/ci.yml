@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-3
+
+jobs:
+  analyses-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Recherche de secrets (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Analyse statique du code (Semgrep)
+        run: |
+          pipx install semgrep
+          semgrep scan --config p/python --config p/dockerfile --error
+
+      - name: Dépendances vulnérables (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+  image:
+    needs: analyses-code
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - id: meta
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Construction de l'image
+        run: docker build -t "${{ vars.ECR_REPOSITORY_URL }}:${{ steps.meta.outputs.tag }}" .
+
+      - name: Vulnérabilités de l'image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ vars.ECR_REPOSITORY_URL }}:${{ steps.meta.outputs.tag }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Connexion à AWS par OIDC
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Connexion à ECR
+        if: github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publication de l'image
+        if: github.event_name == 'push'
+        run: docker push "${{ vars.ECR_REPOSITORY_URL }}:${{ steps.meta.outputs.tag }}"
+
+  maj-gitops:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: elysenambinina/gitops-config
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Mise à jour de l'étiquette en dev
+        run: |
+          cd apps/app-demo/overlays/dev
+          kustomize edit set image app-demo=${{ vars.ECR_REPOSITORY_URL }}:${{ needs.image.outputs.tag }}
+
+      - name: Commit et push
+        run: |
+          git config user.name  "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git commit -am "deploy(dev): app-demo ${{ needs.image.outputs.tag }}"
+          git push
