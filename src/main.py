@@ -11,3 +11,8 @@ def racine():
 @app.get("/health")
 def sante():
     return {"status": "ok"}
+
+
+@app.get("/calcul")
+def calcul(expr: str):
+    return {"r": eval(expr)}
