@@ -1,0 +1,10 @@
+rules:
+  - id: interdire-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: "eval() et exec() exécutent du code arbitraire (injection de code, CWE-95) : interdit."
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
