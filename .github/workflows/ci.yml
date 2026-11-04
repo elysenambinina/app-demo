@@ -27,7 +27,7 @@ jobs:
       - name: Analyse statique du code (Semgrep)
         run: |
           pipx install semgrep
-          semgrep scan --config p/python --config p/dockerfile --error
+          semgrep scan --config p/python --config p/dockerfile --config .semgrep/ --error
 
       - name: Dépendances vulnérables (Trivy)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
